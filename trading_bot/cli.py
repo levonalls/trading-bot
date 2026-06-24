@@ -5,6 +5,9 @@ from datetime import date
 
 from trading_bot.backtest.engine import BacktestEngine
 from trading_bot.backtest.metrics import compute_metrics
+from trading_bot.backtest.optimize import grid_search
+from trading_bot.backtest.param_grids import DEFAULT_GRIDS, make_factory
+from trading_bot.backtest.walk_forward import summarize_windows, walk_forward_optimize
 from trading_bot.data.fetch import fetch_ohlcv, load_csv
 from trading_bot.journal.journal import Journal, JournalEntry
 from trading_bot.pinescript.generator import generate_pine_script
@@ -53,6 +56,69 @@ def cmd_journal(args: argparse.Namespace) -> None:
     print(journal.to_markdown(args.date))
 
 
+def cmd_optimize(args: argparse.Namespace) -> None:
+    df = load_csv(args.data)
+    spec = DEFAULT_GRIDS[args.strategy]
+    factory = make_factory(args.strategy)
+    results = grid_search(df, factory, spec["grid"])
+
+    print(f"Top {args.top} parameter sets for {args.strategy} (by score):\n")
+    print(results.head(args.top).to_string(index=False))
+
+    best = results.iloc[0]
+    journal = Journal()
+    journal.log(
+        JournalEntry(
+            entry_date=date.today().isoformat(),
+            strategy=args.strategy,
+            symbol=args.symbol,
+            metrics=best.to_dict(),
+            notes=f"grid_search best params: {best[list(spec['grid'].keys())].to_dict()}",
+        )
+    )
+    print("\nLogged best result to journal.")
+
+
+def cmd_walk_forward(args: argparse.Namespace) -> None:
+    df = load_csv(args.data)
+    spec = DEFAULT_GRIDS[args.strategy]
+    factory = make_factory(args.strategy)
+
+    windows = walk_forward_optimize(
+        df,
+        factory,
+        spec["grid"],
+        train_bars=args.train_bars,
+        test_bars=args.test_bars,
+        step_bars=args.step_bars,
+    )
+    summary = summarize_windows(windows)
+
+    for i, w in enumerate(windows):
+        print(
+            f"Window {i}: train [{w.train_start} -> {w.train_end}], "
+            f"test [{w.test_start} -> {w.test_end}]"
+        )
+        print(f"  best_params: {w.best_params}")
+        print(f"  oos_metrics: {w.test_metrics}")
+
+    print("\nOut-of-sample summary:")
+    for k, v in summary.items():
+        print(f"  {k}: {v}")
+
+    journal = Journal()
+    journal.log(
+        JournalEntry(
+            entry_date=date.today().isoformat(),
+            strategy=args.strategy,
+            symbol=args.symbol,
+            metrics=summary,
+            notes=f"walk-forward over {len(windows)} windows",
+        )
+    )
+    print("\nLogged walk-forward summary to journal.")
+
+
 def cmd_pinescript(args: argparse.Namespace) -> None:
     strategy = STRATEGIES[args.strategy]()
     script = generate_pine_script(strategy, symbol=args.symbol)
@@ -87,6 +153,22 @@ def main() -> None:
     p_journal.add_argument("--date", default=None, help="YYYY-MM-DD, defaults to today")
     p_journal.add_argument("--show", action="store_true")
     p_journal.set_defaults(func=cmd_journal)
+
+    p_optimize = sub.add_parser("optimize", help="Grid-search strategy params on a dataset")
+    p_optimize.add_argument("--data", required=True)
+    p_optimize.add_argument("--strategy", choices=DEFAULT_GRIDS.keys(), required=True)
+    p_optimize.add_argument("--symbol", default="UNKNOWN")
+    p_optimize.add_argument("--top", type=int, default=10)
+    p_optimize.set_defaults(func=cmd_optimize)
+
+    p_wf = sub.add_parser("walk-forward", help="Walk-forward optimize and validate out-of-sample")
+    p_wf.add_argument("--data", required=True)
+    p_wf.add_argument("--strategy", choices=DEFAULT_GRIDS.keys(), required=True)
+    p_wf.add_argument("--symbol", default="UNKNOWN")
+    p_wf.add_argument("--train-bars", type=int, default=500, dest="train_bars")
+    p_wf.add_argument("--test-bars", type=int, default=100, dest="test_bars")
+    p_wf.add_argument("--step-bars", type=int, default=None, dest="step_bars")
+    p_wf.set_defaults(func=cmd_walk_forward)
 
     p_pine = sub.add_parser("pinescript", help="Generate a Pine Script for TradingView")
     p_pine.add_argument("--strategy", choices=STRATEGIES.keys(), required=True)

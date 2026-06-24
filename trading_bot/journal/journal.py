@@ -28,7 +28,9 @@ class Journal:
 
     def __init__(self, db_path: Path | str = DEFAULT_DB_PATH):
         self.db_path = Path(db_path)
-        self._conn = sqlite3.connect(self.db_path)
+        # check_same_thread=False: FastAPI runs sync endpoints in a
+        # threadpool, so this connection may be used from multiple threads.
+        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS entries (

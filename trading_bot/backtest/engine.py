@@ -98,7 +98,11 @@ class BacktestEngine:
             equity_curve.append(equity)
 
         equity_series = pd.Series(equity_curve, index=df.index, name="equity")
-        trades_df = pd.DataFrame([t.__dict__ for t in trades])
+        trade_columns = [
+            "entry_time", "exit_time", "direction", "entry_price",
+            "exit_price", "size", "pnl", "exit_reason",
+        ]
+        trades_df = pd.DataFrame([t.__dict__ for t in trades], columns=trade_columns)
         return BacktestResult(equity_series, trades_df, strategy.name)
 
 
