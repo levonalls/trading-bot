@@ -9,11 +9,28 @@ from trading_bot.execution.broker_base import Broker
 LIVE_CONFIRM_VALUE = "I_UNDERSTAND_LIVE_TRADING"
 
 
+def _has_sandbox(client) -> bool:
+    """Whether this ccxt exchange has a real test/sandbox endpoint.
+
+    Some exchanges (e.g. Coinbase's Advanced Trade API) have no sandbox at
+    all — calling set_sandbox_mode(True) on them raises, since ccxt has no
+    test URL to swap in. has['sandbox'] is the authoritative flag; checking
+    urls['test'] as a fallback covers older ccxt versions that don't set it.
+    """
+    return bool(client.has.get("sandbox")) or bool(client.urls.get("test"))
+
+
 class CcxtBroker(Broker):
     """Crypto spot/futures execution via ccxt.
 
-    Defaults to an exchange's sandbox/testnet ("paper" mode). To place real
-    orders you must pass paper=False *and* have
+    paper=True (default) never risks real funds:
+    - On exchanges with a real sandbox/testnet (e.g. Binance), orders are
+      sent to that sandbox using sandbox API keys.
+    - On exchanges with no sandbox (e.g. Coinbase), orders are simulated
+      locally against the real, live market price (fetched read-only) and
+      never submitted — "status": "filled_dryrun" makes this explicit.
+
+    To place real orders you must pass paper=False *and* have
     TRADING_BOT_LIVE_CONFIRM=I_UNDERSTAND_LIVE_TRADING set in the
     environment — this is intentional friction, not a bug.
     """
@@ -51,12 +68,24 @@ class CcxtBroker(Broker):
             }
         )
 
+        self.dry_run = False
         if paper:
-            if not self.client.has.get("sandbox", False) and not hasattr(self.client, "set_sandbox_mode"):
-                raise RuntimeError(f"{exchange_id} does not support a ccxt sandbox mode")
-            self.client.set_sandbox_mode(True)
+            if _has_sandbox(self.client):
+                self.client.set_sandbox_mode(True)
+            else:
+                self.dry_run = True
 
     def place_order(self, symbol: str, side: str, size: float, order_type: str = "market") -> dict:
+        if self.dry_run:
+            ticker = self.client.fetch_ticker(symbol)
+            return {
+                "symbol": symbol,
+                "side": side,
+                "size": size,
+                "status": "filled_dryrun",
+                "simulated_price": ticker["last"],
+            }
+
         order = self.client.create_order(symbol, order_type, side, size)
         return {
             "symbol": symbol,
