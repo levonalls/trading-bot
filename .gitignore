@@ -6,3 +6,5 @@ data/*.csv
 .pytest_cache/
 .env
 .env.*
+live_runner_state_*.json
+live_runner.kill
