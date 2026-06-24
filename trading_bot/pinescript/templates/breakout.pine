@@ -1,0 +1,32 @@
+//@version=5
+strategy("Donchian Breakout", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=10)
+
+entryLen = input.int({entry_window}, "Entry Window")
+exitLen = input.int({exit_window}, "Exit Window")
+stopPct = input.float({stop_loss_pct}, "Stop Loss %")
+tpPct = input.float({take_profit_pct}, "Take Profit %")
+
+entryHigh = ta.highest(high, entryLen)
+entryLow = ta.lowest(low, entryLen)
+exitHigh = ta.highest(high, exitLen)
+exitLow = ta.lowest(low, exitLen)
+
+longCond = close >= entryHigh[1]
+shortCond = close <= entryLow[1]
+
+if longCond
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", "Long", stop=close * (1 - stopPct), limit=close * (1 + tpPct))
+
+if shortCond
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", "Short", stop=close * (1 + stopPct), limit=close * (1 - tpPct))
+
+if strategy.position_size > 0 and close <= exitLow[1]
+    strategy.close("Long")
+
+if strategy.position_size < 0 and close >= exitHigh[1]
+    strategy.close("Short")
+
+alertcondition(longCond, title="Breakout Long", message='{{"action": "long", "symbol": "{symbol}"}}')
+alertcondition(shortCond, title="Breakout Short", message='{{"action": "short", "symbol": "{symbol}"}}')

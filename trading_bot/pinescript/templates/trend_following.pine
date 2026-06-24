@@ -1,0 +1,26 @@
+//@version=5
+strategy("Trend Following EMA Crossover", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=10)
+
+fastLen = input.int({fast_ema}, "Fast EMA")
+slowLen = input.int({slow_ema}, "Slow EMA")
+trendLen = input.int({trend_ema}, "Trend EMA")
+stopPct = input.float({stop_loss_pct}, "Stop Loss %")
+tpPct = input.float({take_profit_pct}, "Take Profit %")
+
+fast = ta.ema(close, fastLen)
+slow = ta.ema(close, slowLen)
+trend = ta.ema(close, trendLen)
+
+longCond = fast > slow and close > trend
+shortCond = fast < slow and close < trend
+
+if longCond
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", "Long", stop=close * (1 - stopPct), limit=close * (1 + tpPct))
+
+if shortCond
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", "Short", stop=close * (1 + stopPct), limit=close * (1 - tpPct))
+
+alertcondition(longCond, title="Trend Long", message='{{"action": "long", "symbol": "{symbol}"}}')
+alertcondition(shortCond, title="Trend Short", message='{{"action": "short", "symbol": "{symbol}"}}')

@@ -1,0 +1,30 @@
+//@version=5
+strategy("Mean Reversion BB+RSI", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=10)
+
+bbLen = input.int({bb_window}, "BB Window")
+bbStd = input.float({bb_std}, "BB Std Dev")
+rsiLen = input.int({rsi_window}, "RSI Window")
+rsiOversold = input.float({rsi_oversold}, "RSI Oversold")
+rsiOverbought = input.float({rsi_overbought}, "RSI Overbought")
+stopPct = input.float({stop_loss_pct}, "Stop Loss %")
+tpPct = input.float({take_profit_pct}, "Take Profit %")
+
+basis = ta.sma(close, bbLen)
+dev = bbStd * ta.stdev(close, bbLen)
+upper = basis + dev
+lower = basis - dev
+rsiVal = ta.rsi(close, rsiLen)
+
+longCond = close < lower and rsiVal < rsiOversold
+shortCond = close > upper and rsiVal > rsiOverbought
+
+if longCond
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", "Long", stop=close * (1 - stopPct), limit=close * (1 + tpPct))
+
+if shortCond
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", "Short", stop=close * (1 + stopPct), limit=close * (1 - tpPct))
+
+alertcondition(longCond, title="MeanRev Long", message='{{"action": "long", "symbol": "{symbol}"}}')
+alertcondition(shortCond, title="MeanRev Short", message='{{"action": "short", "symbol": "{symbol}"}}')
