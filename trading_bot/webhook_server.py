@@ -15,6 +15,7 @@ app = FastAPI(title="TradingView Webhook Receiver")
 
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")  # set this; unset means auth is disabled (dev only)
 TRADING_MODE = os.environ.get("TRADING_MODE", "paper")  # "paper" or "live"
+CRYPTO_EXCHANGE = os.environ.get("CRYPTO_EXCHANGE", "binance")  # ccxt exchange id, e.g. "coinbase"
 
 risk_guard = RiskGuard(
     max_order_size=float(os.environ.get("MAX_ORDER_SIZE", "1.0")),
@@ -44,7 +45,7 @@ def _get_broker(market: str) -> Broker:
     if market == "crypto":
         from trading_bot.execution.ccxt_broker import CcxtBroker
 
-        return CcxtBroker(paper=paper)
+        return CcxtBroker(exchange_id=CRYPTO_EXCHANGE, paper=paper)
     raise ValueError(f"Unknown market '{market}'")
 
 

@@ -107,14 +107,23 @@ real money you'd be fine losing.**
 ### 2. Set environment variables
 
 ```bash
-export BINANCE_API_KEY=...
-export BINANCE_API_SECRET=...
+export CRYPTO_EXCHANGE=coinbase                  # any ccxt exchange id: binance, coinbase, bybit, ...
+export COINBASE_API_KEY=...
+export COINBASE_API_SECRET=...
 
 export WEBHOOK_SECRET=$(openssl rand -hex 32)   # required for the webhook to accept requests
 export TRADING_MODE=paper                       # "paper" or "live" — start with paper
 export MAX_ORDER_SIZE=0.01                       # hard cap on size per order, in base units
 export MAX_DAILY_ORDERS=20                       # hard cap on orders per day
 ```
+
+The webhook server reads `{EXCHANGE}_API_KEY` / `{EXCHANGE}_API_SECRET` for
+whichever exchange `CRYPTO_EXCHANGE` names (uppercased), so switching
+exchanges is just changing `CRYPTO_EXCHANGE` and setting the matching key
+pair — no code changes needed. Note that Coinbase's Advanced Trade API has
+no sandbox: in paper mode, `CcxtBroker` automatically falls back to a local
+dry run (real Coinbase price, simulated fill, nothing submitted) rather than
+a sandbox order, since there's no testnet to send it to.
 
 `TRADING_MODE=live` alone is not enough to place real orders: `CcxtBroker`
 and `IBBroker` both additionally require
