@@ -49,6 +49,27 @@ def test_run_live_places_one_order_then_holds(tmp_path, monkeypatch):
     assert state_file.exists()
 
 
+def test_position_size_capped_by_max_position_pct(monkeypatch):
+    from trading_bot.live_runner import _position_size
+    from trading_bot.strategies.trend_following import TrendFollowingStrategy
+
+    fake_broker = MagicMock()
+    fake_broker.client.fetch_ticker.return_value = {"last": 100.0}
+    fake_broker.fetch_balance.return_value = {"total": {"USDT": 10_000.0}}
+
+    strategy = TrendFollowingStrategy()
+    strategy.params.stop_loss_pct = 0.001  # tiny stop -> risk sizing would want a huge position
+
+    size = _position_size(
+        fake_broker, "BTC/USDT", strategy,
+        risk_per_trade_pct=0.01, max_position_pct=0.20, paper=True,
+    )
+
+    # Without the cap: risk_amount=100, stop_distance=0.1 -> size=1000 (notional 100,000)
+    # With the cap: notional must not exceed 20% of 10,000 = 2,000 -> size <= 20
+    assert size * 100.0 <= 10_000.0 * 0.20 + 1e-6
+
+
 def test_run_live_respects_kill_switch_file(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TRADING_MODE", "paper")

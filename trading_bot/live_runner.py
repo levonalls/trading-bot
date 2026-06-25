@@ -48,6 +48,7 @@ def run_live(
     timeframe: str,
     poll_seconds: int,
     risk_per_trade_pct: float,
+    max_position_pct: float = 0.20,
     max_iterations: int | None = None,
 ) -> None:
     """Polls live OHLCV data, computes the strategy's signal on the latest
@@ -92,7 +93,7 @@ def run_live(
 
             if target_position != state.position:
                 side = "buy" if target_position > state.position else "sell"
-                size = _position_size(broker, symbol, strategy, risk_per_trade_pct, paper)
+                size = _position_size(broker, symbol, strategy, risk_per_trade_pct, max_position_pct, paper)
 
                 allowed, reason = risk_guard.check(size)
                 if not allowed:
@@ -134,9 +135,20 @@ def run_live(
             time.sleep(poll_seconds)
 
 
-def _position_size(broker: CcxtBroker, symbol: str, strategy, risk_per_trade_pct: float, paper: bool) -> float:
+def _position_size(
+    broker: CcxtBroker,
+    symbol: str,
+    strategy,
+    risk_per_trade_pct: float,
+    max_position_pct: float,
+    paper: bool,
+) -> float:
     """Size a position so a stop-loss hit risks `risk_per_trade_pct` of
     available quote balance, mirroring the backtest engine's sizing logic.
+    Caps the trade's notional value (size * price) to at most
+    `max_position_pct` of equity, regardless of stop distance, so a tight
+    stop on a volatile symbol can't blow past a sane fraction of the
+    portfolio in a single trade.
     """
     quote = symbol.split("/")[1]
     price = broker.client.fetch_ticker(symbol)["last"]
@@ -165,7 +177,12 @@ def _position_size(broker: CcxtBroker, symbol: str, strategy, risk_per_trade_pct
 
     stop_distance = price * strategy.params.stop_loss_pct
     risk_amount = equity * risk_per_trade_pct
-    return round(risk_amount / stop_distance, 8) if stop_distance > 0 else 0.0
+    size = risk_amount / stop_distance if stop_distance > 0 else 0.0
+
+    max_size = (equity * max_position_pct) / price if price > 0 else 0.0
+    size = min(size, max_size)
+
+    return round(size, 8)
 
 
 def main() -> None:
@@ -175,6 +192,8 @@ def main() -> None:
     parser.add_argument("--timeframe", default="1h")
     parser.add_argument("--poll-seconds", type=int, default=300)
     parser.add_argument("--risk-per-trade-pct", type=float, default=0.01)
+    parser.add_argument("--max-position-pct", type=float, default=0.20,
+                         help="Hard cap on a single trade's notional size, as a fraction of equity")
     args = parser.parse_args()
 
     run_live(
@@ -183,6 +202,7 @@ def main() -> None:
         args.timeframe,
         args.poll_seconds,
         args.risk_per_trade_pct,
+        args.max_position_pct,
     )
 
 

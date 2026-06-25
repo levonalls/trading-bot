@@ -161,7 +161,9 @@ python -m trading_bot.live_runner --strategy trend_following --symbol BTC/USD --
 It polls every `--poll-seconds`, persists its last known position to
 `live_runner_state_<strategy>_<symbol>.json` (so a restart doesn't re-fire an
 already-placed order), and sizes each order so a stop-loss hit risks
-`--risk-per-trade-pct` (default 1%) of your available balance. To halt it
+`--risk-per-trade-pct` (default 1%) of your available balance — capped so
+the trade's total notional value never exceeds `--max-position-pct`
+(default 20%) of your balance, regardless of stop distance. To halt it
 immediately — including across process restarts — create the file
 `live_runner.kill` in its working directory; it's checked before every poll
 and the runner exits as soon as it sees it. Delete the file to resume.
