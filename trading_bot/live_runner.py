@@ -141,9 +141,17 @@ def _position_size(broker: CcxtBroker, symbol: str, strategy, risk_per_trade_pct
     quote = symbol.split("/")[1]
     price = broker.client.fetch_ticker(symbol)["last"]
 
+    # Quote currencies like USD/USDC/USDT are economically interchangeable
+    # 1:1 for sizing purposes, so check all of them, not just the literal
+    # quote in the trading pair -- a USD pair shouldn't fail to size just
+    # because the balance happens to be held in USDC.
+    stablecoin_aliases = {"USD", "USDC", "USDT"}
+    candidates = stablecoin_aliases if quote in stablecoin_aliases else {quote}
+
     try:
         balance = broker.fetch_balance()
-        equity = balance.get("total", {}).get(quote, 0.0) or 0.0
+        totals = balance.get("total", {}) or {}
+        equity = sum(totals.get(c, 0.0) or 0.0 for c in candidates)
     except Exception:
         equity = 0.0
 
@@ -151,7 +159,8 @@ def _position_size(broker: CcxtBroker, symbol: str, strategy, risk_per_trade_pct
         equity = float(os.environ.get("ASSUMED_EQUITY", "0"))
         if not equity:
             raise RuntimeError(
-                f"Could not determine {quote} balance and no ASSUMED_EQUITY fallback is set."
+                f"Could not determine balance in any of {sorted(candidates)} "
+                "and no ASSUMED_EQUITY fallback is set."
             )
 
     stop_distance = price * strategy.params.stop_loss_pct

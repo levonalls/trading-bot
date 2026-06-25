@@ -68,6 +68,20 @@ performance. Only trust a strategy whose walk-forward summary looks good —
 an in-sample-only `optimize` result is not evidence the strategy works going
 forward.
 
+### Screening: which symbols should I even trade?
+
+```bash
+python -m trading_bot.screen --exchange coinbase --quote USD --num-candidates 10 --top-n 3
+```
+
+Pulls the most liquid `quote`-denominated markets on `exchange` by 24h
+volume (excluding stablecoin pairs), runs a walk-forward optimization of
+every strategy against every candidate, scores each by out-of-sample
+compounded return penalized for drawdown, and prints/logs the top 3
+symbol+strategy combinations. Treat this as a starting shortlist, not a
+final answer — rerun `walk-forward` with the full parameter grid
+(`trading_bot.cli walk-forward`) on whatever it surfaces before trading it.
+
 ## Strategies implemented
 
 - **Trend following** — EMA crossover with trend filter (most widely used by
