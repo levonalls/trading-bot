@@ -51,21 +51,31 @@ def run_live(
     risk_per_trade_pct: float,
     max_position_pct: float = 0.20,
     max_iterations: int | None = None,
+    market: str = "crypto",
 ) -> None:
     """Polls live OHLCV data, computes the strategy's signal on the latest
     closed bar, and places an order only when the signal changes from the
     last known position. State (current position) is persisted to disk so
     restarting the process doesn't re-fire an order it already placed.
 
+    `market="futures"` routes to Interactive Brokers instead of ccxt: data
+    and equity come from the IB connection rather than an exchange, and
+    sizing rounds to whole contracts since futures can't be fractional.
+
     Safety is layered, not just here:
-    - CcxtBroker itself refuses live orders without TRADING_BOT_LIVE_CONFIRM.
+    - CcxtBroker/IBBroker themselves refuse live orders without
+      TRADING_BOT_LIVE_CONFIRM.
     - RiskGuard caps order size and orders/day, same as the webhook path.
     - KILL_SWITCH_FILE is checked every loop and halts immediately if present.
     """
     paper = os.environ.get("TRADING_MODE", "paper") != "live"
     exchange_id = os.environ.get("CRYPTO_EXCHANGE", "binance")
 
-    broker = CcxtBroker(exchange_id=exchange_id, paper=paper)
+    if market == "futures":
+        from trading_bot.execution.ib_broker import IBBroker
+        broker = IBBroker(paper=paper)
+    else:
+        broker = CcxtBroker(exchange_id=exchange_id, paper=paper)
     risk_guard = RiskGuard(
         max_order_size=float(os.environ.get("MAX_ORDER_SIZE", "1.0")),
         max_daily_orders=int(os.environ.get("MAX_DAILY_ORDERS", "50")),
@@ -76,7 +86,8 @@ def run_live(
     state_path = Path(f"live_runner_state_{strategy_name}_{symbol.replace('/', '_')}.json")
     state = RunnerState.load(state_path)
 
-    print(f"Live runner started: {strategy_name} on {symbol} ({exchange_id}, "
+    print(f"Live runner started: {strategy_name} on {symbol} "
+          f"({'IB futures' if market == 'futures' else exchange_id}, "
           f"{'PAPER' if paper else 'LIVE'}). Last known position: {state.position}")
 
     iterations = 0
@@ -88,13 +99,20 @@ def run_live(
             break
 
         try:
-            df = fetch_ohlcv(symbol, timeframe=timeframe, limit=300, exchange=exchange_id)
+            if market == "futures":
+                df = broker.fetch_ohlcv(symbol, timeframe=timeframe, limit=300)
+            else:
+                df = fetch_ohlcv(symbol, timeframe=timeframe, limit=300, exchange=exchange_id)
             signal = strategy.signals(df)
             target_position = int(signal.iloc[-1])
+            price = float(df["close"].iloc[-1])
 
             if target_position != state.position:
                 side = "buy" if target_position > state.position else "sell"
-                size = _position_size(broker, symbol, strategy, risk_per_trade_pct, max_position_pct, paper)
+                if market == "futures":
+                    size = _futures_position_size(broker, symbol, price, strategy, risk_per_trade_pct, max_position_pct)
+                else:
+                    size = _position_size(broker, symbol, strategy, risk_per_trade_pct, max_position_pct, paper)
 
                 allowed, reason = risk_guard.check(size)
                 if not allowed:
@@ -106,6 +124,8 @@ def run_live(
                         metrics={"rejected": True},
                         notes=f"live runner rejected: {reason}",
                     ))
+                elif size <= 0:
+                    print("Order skipped: computed size rounded to 0 contracts/units.")
                 else:
                     order = broker.place_order(symbol, side, size)
                     risk_guard.record_order()
@@ -118,7 +138,7 @@ def run_live(
                     ))
                     print(f"Position {state.position} -> {target_position}: placed {side} {size} {symbol}: {order}")
                     state.position = target_position
-                    state.notional = 0.0 if target_position == 0 else size * broker.client.fetch_ticker(symbol)["last"]
+                    state.notional = 0.0 if target_position == 0 else size * price
                     state.save(state_path)
             else:
                 print(f"No change. Position remains {state.position}.")
@@ -292,6 +312,23 @@ def _position_size(
     return _size_for_notional_cap(price, equity, max_notional, risk_per_trade_pct, strategy)
 
 
+def _futures_position_size(broker, symbol: str, price: float, strategy, risk_per_trade_pct: float, max_position_pct: float) -> int:
+    """Same risk-per-trade / max-notional logic as `_position_size`, but in
+    whole futures contracts (size * price * multiplier is the real notional,
+    not size * price), since you can't buy a fractional contract.
+    """
+    multiplier = broker.contract_multiplier(symbol)
+    equity = broker.account_equity()
+    stop_distance = price * strategy.params.stop_loss_pct
+    risk_amount = equity * risk_per_trade_pct
+    contracts_by_risk = risk_amount / (stop_distance * multiplier) if stop_distance > 0 else 0.0
+
+    max_notional = equity * max_position_pct
+    contracts_by_cap = max_notional / (price * multiplier) if price > 0 else 0.0
+
+    return int(min(contracts_by_risk, contracts_by_cap))
+
+
 def _size_for_notional_cap(price: float, equity: float, max_notional: float, risk_per_trade_pct: float, strategy) -> float:
     stop_distance = price * strategy.params.stop_loss_pct
     risk_amount = equity * risk_per_trade_pct
@@ -306,7 +343,9 @@ def _size_for_notional_cap(price: float, equity: float, max_notional: float, ris
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run a strategy live/paper against an exchange")
     parser.add_argument("--strategy", choices=STRATEGIES.keys(), help="Single-symbol mode")
-    parser.add_argument("--symbol", help="e.g. BTC/USD (single-symbol mode)")
+    parser.add_argument("--symbol", help="e.g. BTC/USD for crypto, or MES for futures (single-symbol mode)")
+    parser.add_argument("--market", choices=["crypto", "futures"], default="crypto",
+                         help="'futures' routes to Interactive Brokers instead of ccxt (single-symbol mode only)")
     parser.add_argument("--pairs", nargs="+",
                          help="Multi-symbol mode: one or more 'strategy:symbol' entries, "
                               "e.g. --pairs mean_reversion:ADA/USD mean_reversion:SOL/USD")
@@ -344,6 +383,7 @@ def main() -> None:
             args.poll_seconds,
             args.risk_per_trade_pct,
             args.max_position_pct,
+            market=args.market,
         )
 
 

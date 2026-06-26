@@ -168,6 +168,18 @@ immediately — including across process restarts — create the file
 `live_runner.kill` in its working directory; it's checked before every poll
 and the runner exits as soon as it sees it. Delete the file to resume.
 
+Add `--market futures --symbol MES` (single-symbol mode only) to trade
+futures through Interactive Brokers instead of crypto through ccxt — TWS/IB
+Gateway must already be running and logged in (see "Going live" below).
+Sizing rounds down to whole contracts and accounts for the contract's
+point multiplier (e.g. $5/point for the MES micro contract), so the same
+`--risk-per-trade-pct` / `--max-position-pct` caps apply in dollar terms:
+
+```bash
+python -m trading_bot.live_runner --strategy trend_following --symbol MES \
+  --market futures --timeframe 1h --poll-seconds 300
+```
+
 **Option B — TradingView-driven webhook.** TradingView's Pine Script runs
 the strategy and decides entries/exits; this bot just executes the alerts
 it receives:

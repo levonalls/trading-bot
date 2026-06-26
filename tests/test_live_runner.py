@@ -106,6 +106,54 @@ def test_run_live_multi_shares_portfolio_budget_across_symbols(tmp_path, monkeyp
     assert fake_broker.place_order.call_count == 2
 
 
+def test_futures_position_size_rounds_to_whole_contracts():
+    from trading_bot.live_runner import _futures_position_size
+    from trading_bot.strategies.trend_following import TrendFollowingStrategy
+
+    fake_broker = MagicMock()
+    fake_broker.contract_multiplier.return_value = 5.0  # MES: $5/point
+    fake_broker.account_equity.return_value = 10_000.0
+
+    strategy = TrendFollowingStrategy()
+    strategy.params.stop_loss_pct = 0.01
+
+    size = _futures_position_size(
+        fake_broker, "MES", price=4500.0, strategy=strategy,
+        risk_per_trade_pct=0.01, max_position_pct=0.20,
+    )
+
+    assert isinstance(size, int)
+    # Notional (size * price * multiplier) must stay within 20% of equity = 2,000
+    assert size * 4500.0 * 5.0 <= 10_000.0 * 0.20 + 1e-6
+
+
+def test_run_live_futures_uses_ib_broker(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TRADING_MODE", "paper")
+    monkeypatch.setenv("MAX_ORDER_SIZE", "1000")
+
+    fake_broker = MagicMock()
+    fake_broker.fetch_ohlcv.return_value = make_df(trend_up=True)
+    fake_broker.contract_multiplier.return_value = 5.0
+    fake_broker.account_equity.return_value = 10_000.0
+    fake_broker.place_order.return_value = {"status": "submitted_paper"}
+
+    with patch("trading_bot.execution.ib_broker.IBBroker", return_value=fake_broker), \
+         patch("trading_bot.live_runner.time.sleep"):
+        run_live(
+            strategy_name="trend_following",
+            symbol="MES",
+            timeframe="1h",
+            poll_seconds=0,
+            risk_per_trade_pct=0.01,
+            max_iterations=3,
+            market="futures",
+        )
+
+    assert fake_broker.place_order.call_count == 1
+    assert isinstance(fake_broker.place_order.call_args.args[2], int)
+
+
 def test_run_live_respects_kill_switch_file(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TRADING_MODE", "paper")
