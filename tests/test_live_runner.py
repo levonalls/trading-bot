@@ -70,6 +70,42 @@ def test_position_size_capped_by_max_position_pct(monkeypatch):
     assert size * 100.0 <= 10_000.0 * 0.20 + 1e-6
 
 
+def test_run_live_multi_shares_portfolio_budget_across_symbols(tmp_path, monkeypatch):
+    from trading_bot.live_runner import run_live_multi
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TRADING_MODE", "paper")
+    monkeypatch.setenv("CRYPTO_EXCHANGE", "coinbase")
+    monkeypatch.setenv("MAX_ORDER_SIZE", "100000")
+
+    fake_broker = MagicMock()
+    fake_broker.client.fetch_ticker.return_value = {"last": 100.0}
+    fake_broker.fetch_balance.return_value = {"total": {"USD": 10_000.0}}
+    fake_broker.place_order.return_value = {"status": "filled_dryrun"}
+
+    df_up = make_df(trend_up=True)
+
+    with patch("trading_bot.live_runner.CcxtBroker", return_value=fake_broker), \
+         patch("trading_bot.live_runner.fetch_ohlcv", return_value=df_up), \
+         patch("trading_bot.live_runner.time.sleep"):
+        run_live_multi(
+            pairs=[("trend_following", "ADA/USD"), ("trend_following", "SOL/USD")],
+            timeframe="1h",
+            poll_seconds=0,
+            risk_per_trade_pct=0.5,  # deliberately huge so the portfolio cap, not risk sizing, binds
+            max_portfolio_pct=0.20,
+            max_iterations=1,
+        )
+
+    # Combined notional placed across both symbols must not exceed 20% of equity (2,000),
+    # even though each symbol's own risk-based sizing would have wanted far more.
+    total_notional = sum(
+        call.args[2] * 100.0 for call in fake_broker.place_order.call_args_list
+    )
+    assert total_notional <= 10_000.0 * 0.20 + 1e-6
+    assert fake_broker.place_order.call_count == 2
+
+
 def test_run_live_respects_kill_switch_file(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TRADING_MODE", "paper")

@@ -176,6 +176,21 @@ it receives:
 uvicorn trading_bot.webhook_server:app --host 0.0.0.0 --port 8000
 ```
 
+**Trading multiple coins at once:** use `--pairs` instead of `--strategy`/`--symbol`
+to run several `strategy:symbol` combos in one process, sharing a single
+risk-aware equity budget:
+
+```bash
+python -m trading_bot.live_runner --pairs mean_reversion:ADA/USD mean_reversion:SOL/USD \
+  --timeframe 1h --poll-seconds 300 --risk-per-trade-pct 0.01 --max-portfolio-pct 0.20
+```
+
+`--max-portfolio-pct` caps the *combined* notional across all pairs (here, 20%
+of equity total, not 20% each) — adding more symbols narrows each one's share
+of that budget rather than silently multiplying total exposure. Each pair
+still gets its own state file, so you can freely add/remove symbols across
+restarts.
+
 For TradingView's servers to reach it, the server needs a public HTTPS URL
 — either deploy it (a small VM/cloud box) or tunnel it during testing
 (e.g. `ngrok http 8000`). Never expose it without `WEBHOOK_SECRET` set.
