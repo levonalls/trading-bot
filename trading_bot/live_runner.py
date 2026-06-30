@@ -5,7 +5,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from trading_bot.data.fetch import fetch_ohlcv
@@ -101,6 +101,19 @@ def run_live(
         try:
             if market == "futures":
                 df = broker.fetch_ohlcv(symbol, timeframe=timeframe, limit=300)
+                fresh, reason = _data_is_fresh(df, timeframe)
+                if not fresh:
+                    print(f"[{symbol}] Skipping — stale market data: {reason}")
+                    journal.log(JournalEntry(
+                        entry_date=date.today().isoformat(),
+                        strategy=strategy_name,
+                        symbol=symbol,
+                        metrics={"skipped": True},
+                        notes=f"stale data: {reason}",
+                    ))
+                    if max_iterations is None or iterations < max_iterations:
+                        time.sleep(poll_seconds)
+                    continue
             else:
                 df = fetch_ohlcv(symbol, timeframe=timeframe, limit=300, exchange=exchange_id)
             signal = strategy.signals(df)
@@ -310,6 +323,33 @@ def _position_size(
     equity = _account_equity(broker, symbol)
     max_notional = equity * max_position_pct
     return _size_for_notional_cap(price, equity, max_notional, risk_per_trade_pct, strategy)
+
+
+_TIMEFRAME_SECONDS = {
+    "1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400,
+}
+
+
+def _data_is_fresh(df, timeframe: str, max_bars_old: int = 2) -> tuple[bool, str]:
+    """Return (True, '') if the latest bar is recent enough to trade on.
+    A bar is considered stale when it is older than max_bars_old * timeframe
+    — e.g. for 1h bars, anything older than 2 hours means IB isn't sending
+    current data for this contract (no subscription, expired contract, etc.).
+    """
+    if df is None or df.empty:
+        return False, "no bars returned"
+    last_ts = df.index[-1]
+    if last_ts.tzinfo is None:
+        last_ts = last_ts.replace(tzinfo=timezone.utc)
+    age_seconds = (datetime.now(timezone.utc) - last_ts).total_seconds()
+    max_age = _TIMEFRAME_SECONDS.get(timeframe, 3600) * max_bars_old
+    if age_seconds > max_age:
+        return False, (
+            f"latest bar is {int(age_seconds / 60)} min old "
+            f"(limit is {int(max_age / 60)} min for {timeframe} bars) — "
+            "check your IBKR market data subscription for this symbol"
+        )
+    return True, ""
 
 
 def _futures_position_size(broker, symbol: str, price: float, strategy, risk_per_trade_pct: float, max_position_pct: float) -> int:

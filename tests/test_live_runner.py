@@ -8,8 +8,13 @@ import pandas as pd
 from trading_bot.live_runner import run_live
 
 
-def make_df(n=300, trend_up=True):
-    idx = pd.date_range("2023-01-01", periods=n, freq="h")
+def make_df(n=300, trend_up=True, recent=False):
+    if recent:
+        # End the series at "now" so the freshness check passes
+        end = pd.Timestamp.now("UTC").floor("h")
+        idx = pd.date_range(end=end, periods=n, freq="h", tz="UTC")
+    else:
+        idx = pd.date_range("2023-01-01", periods=n, freq="h")
     drift = np.linspace(0, 50 if trend_up else -50, n)
     close = 100 + drift
     return pd.DataFrame(
@@ -133,7 +138,7 @@ def test_run_live_futures_uses_ib_broker(tmp_path, monkeypatch):
     monkeypatch.setenv("MAX_ORDER_SIZE", "1000")
 
     fake_broker = MagicMock()
-    fake_broker.fetch_ohlcv.return_value = make_df(trend_up=True)
+    fake_broker.fetch_ohlcv.return_value = make_df(trend_up=True, recent=True)
     fake_broker.contract_multiplier.return_value = 5.0
     fake_broker.account_equity.return_value = 10_000.0
     fake_broker.place_order.return_value = {"status": "submitted_paper"}
@@ -152,6 +157,30 @@ def test_run_live_futures_uses_ib_broker(tmp_path, monkeypatch):
 
     assert fake_broker.place_order.call_count == 1
     assert isinstance(fake_broker.place_order.call_args.args[2], int)
+
+
+def test_run_live_futures_skips_stale_data(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TRADING_MODE", "paper")
+    monkeypatch.setenv("MAX_ORDER_SIZE", "1000")
+
+    fake_broker = MagicMock()
+    # Stale df — last bar was hours ago
+    fake_broker.fetch_ohlcv.return_value = make_df(trend_up=True, recent=False)
+
+    with patch("trading_bot.execution.ib_broker.IBBroker", return_value=fake_broker), \
+         patch("trading_bot.live_runner.time.sleep"):
+        run_live(
+            strategy_name="trend_following",
+            symbol="MES",
+            timeframe="1h",
+            poll_seconds=0,
+            risk_per_trade_pct=0.01,
+            max_iterations=3,
+            market="futures",
+        )
+
+    fake_broker.place_order.assert_not_called()
 
 
 def test_run_live_respects_kill_switch_file(tmp_path, monkeypatch):
