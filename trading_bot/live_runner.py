@@ -43,6 +43,14 @@ class RunnerState:
         path.write_text(json.dumps(self.__dict__))
 
 
+def _apply_params(strategy, overrides: dict) -> None:
+    """Apply optimizer-tuned param overrides to a strategy instance."""
+    for key, value in overrides.items():
+        current = getattr(strategy.params, key, None)
+        if current is not None:
+            setattr(strategy.params, key, type(current)(value))
+
+
 def run_live(
     strategy_name: str,
     symbol: str,
@@ -50,6 +58,7 @@ def run_live(
     poll_seconds: int,
     risk_per_trade_pct: float,
     max_position_pct: float = 0.20,
+    params_override: dict | None = None,
     max_iterations: int | None = None,
 ) -> None:
     """Polls live OHLCV data, computes the strategy's signal on the latest
@@ -72,6 +81,8 @@ def run_live(
     )
     journal = Journal()
     strategy = STRATEGIES[strategy_name]()
+    if params_override:
+        _apply_params(strategy, params_override)
 
     state_path = Path(f"live_runner_state_{strategy_name}_{symbol.replace('/', '_')}.json")
     state = RunnerState.load(state_path)
@@ -143,6 +154,7 @@ def run_live_multi(
     poll_seconds: int,
     risk_per_trade_pct: float,
     max_portfolio_pct: float = 0.20,
+    params_override: dict | None = None,
     max_iterations: int | None = None,
 ) -> None:
     """Like `run_live`, but manages several (strategy, symbol) pairs against
@@ -165,10 +177,13 @@ def run_live_multi(
     managed = []
     for strategy_name, symbol in pairs:
         state_path = Path(f"live_runner_state_{strategy_name}_{symbol.replace('/', '_')}.json")
+        strategy = STRATEGIES[strategy_name]()
+        if params_override:
+            _apply_params(strategy, params_override)
         managed.append({
             "strategy_name": strategy_name,
             "symbol": symbol,
-            "strategy": STRATEGIES[strategy_name](),
+            "strategy": strategy,
             "state_path": state_path,
             "state": RunnerState.load(state_path),
         })
@@ -317,7 +332,12 @@ def main() -> None:
                          help="Single-symbol mode: cap on that trade's notional, as a fraction of equity")
     parser.add_argument("--max-portfolio-pct", type=float, default=0.20,
                          help="Multi-symbol mode: cap on the COMBINED notional of all pairs, as a fraction of equity")
+    parser.add_argument("--params", default=None,
+                         help="JSON string of strategy param overrides from the optimizer, "
+                              "e.g. '{\"bb_window\": 30, \"bb_std\": 2.5, \"rsi_window\": 10}'")
     args = parser.parse_args()
+
+    params_override = json.loads(args.params) if args.params else None
 
     if args.pairs:
         pairs = []
@@ -333,6 +353,7 @@ def main() -> None:
             args.poll_seconds,
             args.risk_per_trade_pct,
             args.max_portfolio_pct,
+            params_override,
         )
     else:
         if not args.strategy or not args.symbol:
@@ -344,6 +365,7 @@ def main() -> None:
             args.poll_seconds,
             args.risk_per_trade_pct,
             args.max_position_pct,
+            params_override,
         )
 
 
