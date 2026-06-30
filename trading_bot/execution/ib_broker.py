@@ -55,16 +55,25 @@ class IBBroker(Broker):
         self.ib.connect(host, port, clientId=client_id)
 
     def _qualified_contract(self, symbol: str, sec_type: str = "FUT"):
-        from ib_insync import Future, Stock
+        from ib_insync import Contract, Stock
 
-        contract = Future(symbol) if sec_type == "FUT" else Stock(symbol, "SMART", "USD")
-        qualified = self.ib.qualifyContracts(contract)
-        if not qualified:
-            raise RuntimeError(f"IB could not qualify contract for '{symbol}'.")
-        # IB often returns multiple expiries for a bare symbol — pick the
-        # front month (nearest expiry) so the bot always trades the most
-        # liquid contract without requiring an explicit expiry date.
-        return sorted(qualified, key=lambda c: c.lastTradeDateOrContractMonth)[0]
+        if sec_type != "FUT":
+            stock = Stock(symbol, "SMART", "USD")
+            qualified = self.ib.qualifyContracts(stock)
+            if not qualified:
+                raise RuntimeError(f"IB could not qualify stock contract for '{symbol}'.")
+            return qualified[0]
+
+        # reqContractDetails handles bare symbols (no expiry/exchange needed)
+        # and returns all listed expiries — pick the front month.
+        template = Contract(secType="FUT", symbol=symbol, currency="USD")
+        details = self.ib.reqContractDetails(template)
+        if not details:
+            raise RuntimeError(
+                f"IB returned no contract details for futures symbol '{symbol}'. "
+                "Check the symbol is correct and TWS market data subscriptions include it."
+            )
+        return sorted(details, key=lambda d: d.contract.lastTradeDateOrContractMonth)[0].contract
 
     def place_order(self, symbol: str, side: str, size: float, sec_type: str = "FUT") -> dict:
         from ib_insync import MarketOrder
