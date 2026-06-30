@@ -63,7 +63,11 @@ class CcxtBroker(Broker):
             {
                 "apiKey": api_key,
                 "secret": api_secret,
-                "options": {"defaultType": market_type},
+                # Some exchanges (e.g. Coinbase) otherwise require a `price` arg
+                # on market buy orders just to compute cost = amount * price.
+                # We always size in base-currency units, so tell ccxt not to
+                # demand that -- the exchange fills at the live market price.
+                "options": {"defaultType": market_type, "createMarketBuyOrderRequiresPrice": False},
                 "enableRateLimit": True,
             }
         )
