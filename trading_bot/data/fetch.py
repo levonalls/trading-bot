@@ -16,7 +16,10 @@ def fetch_ohlcv(symbol: str, timeframe: str = "1h", limit: int = 1000, exchange:
     client = exchange_class()
     timeframe_ms = client.parse_timeframe(timeframe) * 1000
 
-    since = client.milliseconds() - timeframe_ms * limit
+    now = client.milliseconds()
+    # Start one extra bar in the past to ensure `since` is never in the future
+    # due to rounding or minor clock skew between our clock and the exchange.
+    since = now - timeframe_ms * (limit + 1)
     candles: list = []
     while len(candles) < limit:
         batch = client.fetch_ohlcv(symbol, timeframe=timeframe, since=since, limit=limit - len(candles))
@@ -24,7 +27,7 @@ def fetch_ohlcv(symbol: str, timeframe: str = "1h", limit: int = 1000, exchange:
             break
         candles.extend(batch)
         next_since = batch[-1][0] + timeframe_ms
-        if next_since <= since:
+        if next_since <= since or next_since > now:
             break
         since = next_since
 
