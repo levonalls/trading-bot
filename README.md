@@ -168,6 +168,12 @@ immediately — including across process restarts — create the file
 `live_runner.kill` in its working directory; it's checked before every poll
 and the runner exits as soon as it sees it. Delete the file to resume.
 
+The live runner also enforces the strategy's `stop_loss_pct` / `take_profit_pct`
+on every poll: if the live price moves against an open position by the stop
+percentage (or in its favor by the take-profit percentage), the position is
+closed immediately rather than waiting for the entry signal to flip. Override
+the levels at launch with `--params '{"stop_loss_pct": 0.02, "take_profit_pct": 0.03}'`.
+
 **Option B — TradingView-driven webhook.** TradingView's Pine Script runs
 the strategy and decides entries/exits; this bot just executes the alerts
 it receives:

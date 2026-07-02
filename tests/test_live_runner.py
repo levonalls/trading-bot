@@ -106,6 +106,81 @@ def test_run_live_multi_shares_portfolio_budget_across_symbols(tmp_path, monkeyp
     assert fake_broker.place_order.call_count == 2
 
 
+def test_run_live_closes_position_at_stop_loss(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TRADING_MODE", "paper")
+    monkeypatch.setenv("CRYPTO_EXCHANGE", "coinbase")
+    monkeypatch.setenv("MAX_ORDER_SIZE", "1000")
+
+    # Open short at 100 with default stop_loss_pct=0.02; price now 103 -> -3% on the short.
+    state_file = tmp_path / "live_runner_state_trend_following_ETH_USD.json"
+    state_file.write_text(json.dumps(
+        {"position": -1, "notional": 100.0, "entry_price": 100.0, "size": 1.0}
+    ))
+
+    fake_broker = MagicMock()
+    fake_broker.client.fetch_ticker.return_value = {"last": 103.0}
+    fake_broker.fetch_balance.return_value = {"total": {"USD": 10_000.0}}
+    fake_broker.place_order.return_value = {"status": "filled_dryrun"}
+
+    with patch("trading_bot.live_runner.CcxtBroker", return_value=fake_broker), \
+         patch("trading_bot.live_runner.fetch_ohlcv", return_value=make_df(trend_up=False)), \
+         patch("trading_bot.live_runner.time.sleep"):
+        run_live(
+            strategy_name="trend_following",
+            symbol="ETH/USD",
+            timeframe="1h",
+            poll_seconds=0,
+            risk_per_trade_pct=0.01,
+            max_iterations=1,
+        )
+
+    # The stop-loss must buy back exactly the open size and flatten the state.
+    fake_broker.place_order.assert_called_once_with("ETH/USD", "buy", 1.0)
+    saved = json.loads(state_file.read_text())
+    assert saved["position"] == 0
+    assert saved["size"] == 0.0
+    assert saved["entry_price"] == 0.0
+
+
+def test_run_live_closes_position_at_take_profit(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TRADING_MODE", "paper")
+    monkeypatch.setenv("CRYPTO_EXCHANGE", "coinbase")
+    monkeypatch.setenv("MAX_ORDER_SIZE", "1000")
+
+    # Open long at 100 with default take_profit_pct=0.06; price now 107 -> +7%.
+    state_file = tmp_path / "live_runner_state_trend_following_ETH_USD.json"
+    state_file.write_text(json.dumps(
+        {"position": 1, "notional": 100.0, "entry_price": 100.0, "size": 1.0}
+    ))
+
+    fake_broker = MagicMock()
+    fake_broker.client.fetch_ticker.return_value = {"last": 107.0}
+    fake_broker.fetch_balance.return_value = {"total": {"USD": 10_000.0}}
+    fake_broker.place_order.return_value = {"status": "filled_dryrun"}
+
+    with patch("trading_bot.live_runner.CcxtBroker", return_value=fake_broker), \
+         patch("trading_bot.live_runner.fetch_ohlcv", return_value=make_df(trend_up=True)), \
+         patch("trading_bot.live_runner.time.sleep"):
+        run_live(
+            strategy_name="trend_following",
+            symbol="ETH/USD",
+            timeframe="1h",
+            poll_seconds=0,
+            risk_per_trade_pct=0.01,
+            max_iterations=1,
+        )
+
+    fake_broker.place_order.assert_called_once_with("ETH/USD", "sell", 1.0)
+    saved = json.loads(state_file.read_text())
+    assert saved["position"] == 0
+
+
 def test_run_live_respects_kill_switch_file(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TRADING_MODE", "paper")

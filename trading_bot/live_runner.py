@@ -32,6 +32,8 @@ KILL_SWITCH_FILE = Path(os.environ.get("LIVE_RUNNER_KILL_FILE", "live_runner.kil
 class RunnerState:
     position: int = 0  # -1, 0, 1 -- last position this runner has taken
     notional: float = 0.0  # size * price of the currently open position, for portfolio-wide budgeting
+    entry_price: float = 0.0  # fill price of the open position, for stop-loss/take-profit checks
+    size: float = 0.0  # base-currency size of the open position, so an exit closes exactly what was opened
 
     @classmethod
     def load(cls, path: Path) -> "RunnerState":
@@ -49,6 +51,65 @@ def _apply_params(strategy, overrides: dict) -> None:
         current = getattr(strategy.params, key, None)
         if current is not None:
             setattr(strategy.params, key, type(current)(value))
+
+
+def _check_protective_exit(
+    broker: CcxtBroker,
+    risk_guard: RiskGuard,
+    journal: Journal,
+    strategy_name: str,
+    symbol: str,
+    strategy,
+    state: RunnerState,
+    state_path: Path,
+    paper: bool,
+) -> bool:
+    """Close the open position if the live price has hit the strategy's
+    stop-loss or take-profit level. Returns True if the position was closed.
+
+    The backtest engine enforces stop_loss_pct/take_profit_pct on every bar,
+    but signal-flip exits alone can ride a winner all the way back to a loss
+    live — this makes the live runner honor the same protective levels.
+    """
+    if state.position == 0 or state.entry_price <= 0 or state.size <= 0:
+        return False
+
+    price = broker.client.fetch_ticker(symbol)["last"]
+    # Signed return of the open position: positive means the trade is winning.
+    gain_pct = (price - state.entry_price) / state.entry_price * state.position
+
+    if gain_pct <= -strategy.params.stop_loss_pct:
+        reason = "stop_loss"
+    elif gain_pct >= strategy.params.take_profit_pct:
+        reason = "take_profit"
+    else:
+        return False
+
+    side = "sell" if state.position > 0 else "buy"
+    allowed, guard_reason = risk_guard.check(state.size)
+    if not allowed:
+        print(f"[{symbol}] Protective exit ({reason}) blocked by risk guard: {guard_reason}")
+        return False
+
+    order = broker.place_order(symbol, side, state.size)
+    risk_guard.record_order()
+    journal.log(JournalEntry(
+        entry_date=date.today().isoformat(),
+        strategy=strategy_name,
+        symbol=symbol,
+        metrics={"side": side, "size": state.size, "exit": reason,
+                 "gain_pct": round(gain_pct, 6), "mode": "paper" if paper else "live"},
+        notes=f"protective exit ({reason}): {order}",
+    ))
+    print(f"[{symbol}] {reason.upper()} hit at {price} (entry {state.entry_price}, "
+          f"{gain_pct:+.2%}): placed {side} {state.size} {symbol}: {order}")
+
+    state.position = 0
+    state.notional = 0.0
+    state.entry_price = 0.0
+    state.size = 0.0
+    state.save(state_path)
+    return True
 
 
 def run_live(
@@ -99,6 +160,13 @@ def run_live(
             break
 
         try:
+            if _check_protective_exit(broker, risk_guard, journal, strategy_name, symbol,
+                                      strategy, state, state_path, paper):
+                # Closed at stop/target this cycle; re-evaluate entries next poll.
+                if max_iterations is None or iterations < max_iterations:
+                    time.sleep(poll_seconds)
+                continue
+
             df = fetch_ohlcv(symbol, timeframe=timeframe, limit=300, exchange=exchange_id)
             signal = strategy.signals(df)
             target_position = int(signal.iloc[-1])
@@ -128,8 +196,11 @@ def run_live(
                         notes=f"live runner order: {order}",
                     ))
                     print(f"Position {state.position} -> {target_position}: placed {side} {size} {symbol}: {order}")
+                    price = broker.client.fetch_ticker(symbol)["last"]
                     state.position = target_position
-                    state.notional = 0.0 if target_position == 0 else size * broker.client.fetch_ticker(symbol)["last"]
+                    state.notional = 0.0 if target_position == 0 else size * price
+                    state.entry_price = 0.0 if target_position == 0 else price
+                    state.size = 0.0 if target_position == 0 else size
                     state.save(state_path)
             else:
                 print(f"No change. Position remains {state.position}.")
@@ -204,6 +275,11 @@ def run_live_multi(
                 m["strategy_name"], m["symbol"], m["strategy"], m["state_path"], m["state"],
             )
             try:
+                if _check_protective_exit(broker, risk_guard, journal, strategy_name, symbol,
+                                          strategy, state, state_path, paper):
+                    # Closed at stop/target this cycle; re-evaluate entries next poll.
+                    continue
+
                 df = fetch_ohlcv(symbol, timeframe=timeframe, limit=300, exchange=exchange_id)
                 signal = strategy.signals(df)
                 target_position = int(signal.iloc[-1])
@@ -243,6 +319,8 @@ def run_live_multi(
                               f"placed {side} {size} {symbol}: {order}")
                         state.position = target_position
                         state.notional = 0.0 if target_position == 0 else size * price
+                        state.entry_price = 0.0 if target_position == 0 else price
+                        state.size = 0.0 if target_position == 0 else size
                         state.save(state_path)
                 else:
                     print(f"[{symbol}] No change. Position remains {state.position}.")
