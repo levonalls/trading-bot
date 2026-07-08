@@ -21,12 +21,14 @@ daily trading journal.
 
 ```
 trading_bot/
-  data/         OHLCV fetching (ccxt) and CSV loading
-  strategies/   Strategy implementations (trend, mean-reversion, breakout)
+  data/         OHLCV fetching (ccxt for crypto, Alpaca for stocks) and CSV loading
+  strategies/   Strategy implementations (swing: trend, mean-reversion, breakout;
+                intraday: opening-range breakout, VWAP reversion, gap-and-go)
   backtest/     Backtest engine, metrics, grid search, walk-forward optimization
   journal/      Daily trading journal (SQLite-backed)
   pinescript/   Pine Script templates generated from strategy params
-  execution/    Broker adapters (ccxt for crypto, IB for futures) + risk guard
+  execution/    Broker adapters (ccxt for crypto, IB for futures, Alpaca for
+                stocks) + risk guard
   webhook_server.py  FastAPI receiver for TradingView alerts -> broker orders
   cli.py        Command-line entrypoint
 ```
@@ -84,14 +86,62 @@ final answer — rerun `walk-forward` with the full parameter grid
 
 ## Strategies implemented
 
+Swing strategies (any timeframe, positions can span days):
+
 - **Trend following** — EMA crossover with trend filter (most widely used by
   systematic trend funds).
 - **Mean reversion** — Bollinger Band + RSI reversion.
 - **Breakout** — Donchian channel breakout (classic "turtle trading" style).
 
+Intraday day-trading strategies (need minute/hour bars; always flat by the
+close — no overnight positions, enforced in the signal itself):
+
+- **Opening-range breakout** (`opening_range_breakout`) — the high/low of the
+  first N bars of the session define a range; trade the first close beyond it,
+  one directional commitment per day.
+- **VWAP reversion** (`vwap_reversion`) — fade stretched moves away from the
+  session's running VWAP (the intraday anchor institutional flow executes
+  against) and exit when price tags VWAP again.
+- **Gap and go** (`gap_and_go`) — when a session opens gapped beyond a
+  threshold and the gap holds past the first bars, ride the momentum; a close
+  back through the session open (the gap filling) invalidates the trade.
+
 Each strategy exposes its parameters so the same logic can be backtested in
 Python and exported to Pine Script (`trading_bot/pinescript/generator.py`) for
-TradingView.
+TradingView (the intraday strategies don't have Pine templates yet, so the
+`pinescript` command only offers the swing strategies).
+
+## Day trading US stocks
+
+The intraday strategies are built for equities. Data and paper execution both
+come from [Alpaca](https://alpaca.markets) — a free account gives you API keys
+that work for the free IEX market-data feed *and* a full paper-trading
+brokerage:
+
+```bash
+export ALPACA_API_KEY=...
+export ALPACA_API_SECRET=...
+
+# Fetch 5-minute SPY bars (index is converted to US/Eastern so sessions line up)
+python -m trading_bot.cli fetch-stocks --symbol SPY --timeframe 5Min --limit 2000 --out data/spy_5min.csv
+
+# Backtest / optimize / walk-forward, same as any other strategy
+python -m trading_bot.cli backtest --data data/spy_5min.csv --strategy opening_range_breakout --symbol SPY
+python -m trading_bot.cli walk-forward --data data/spy_5min.csv --strategy vwap_reversion --symbol SPY \
+  --train-bars 1500 --test-bars 300
+```
+
+Execution goes through `trading_bot/execution/alpaca_broker.py`
+(`AlpacaBroker`), which defaults to Alpaca's **paper** endpoint and submits
+`time_in_force="day"` orders so nothing outlives the session. Going live
+requires the same `TRADING_BOT_LIVE_CONFIRM` speed bump as the other brokers.
+
+Two regulatory realities to know before trading these live:
+
+- **Pattern day trader rule**: 4+ day trades in 5 business days requires
+  $25,000 minimum equity in a margin account. Paper trading has no such limit.
+- Shorting requires a margin account and locate availability; cash accounts
+  can only trade the long side of these strategies.
 
 ## Risk management
 

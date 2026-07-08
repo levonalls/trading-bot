@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 from trading_bot.strategies.breakout import BreakoutParams, BreakoutStrategy
+from trading_bot.strategies.gap_and_go import GapAndGoParams, GapAndGoStrategy
 from trading_bot.strategies.mean_reversion import MeanReversionParams, MeanReversionStrategy
+from trading_bot.strategies.opening_range_breakout import (
+    OpeningRangeBreakoutParams,
+    OpeningRangeBreakoutStrategy,
+)
 from trading_bot.strategies.trend_following import TrendFollowingParams, TrendFollowingStrategy
+from trading_bot.strategies.vwap_reversion import VwapReversionParams, VwapReversionStrategy
 
 # Default search spaces and (params-class, strategy-class) pairs for each
 # named strategy, used by the CLI's optimize/walk-forward commands.
@@ -38,6 +44,37 @@ DEFAULT_GRIDS = {
         },
         "params_cls": BreakoutParams,
         "strategy_cls": BreakoutStrategy,
+    },
+    # Intraday strategies: optimize on minute-bar data (e.g. cli fetch-stocks
+    # --timeframe 5Min); the stop/take-profit ranges are day-trade scale.
+    "opening_range_breakout": {
+        "grid": {
+            "range_bars": [3, 6, 12],
+            "stop_loss_pct": [0.005, 0.01, 0.015],
+            "take_profit_pct": [0.01, 0.02, 0.03],
+        },
+        "params_cls": OpeningRangeBreakoutParams,
+        "strategy_cls": OpeningRangeBreakoutStrategy,
+    },
+    "vwap_reversion": {
+        "grid": {
+            "band_pct": [0.003, 0.005, 0.01],
+            "warmup_bars": [3, 6],
+            "stop_loss_pct": [0.005, 0.01],
+            "take_profit_pct": [0.01, 0.015, 0.02],
+        },
+        "params_cls": VwapReversionParams,
+        "strategy_cls": VwapReversionStrategy,
+    },
+    "gap_and_go": {
+        "grid": {
+            "min_gap_pct": [0.01, 0.02, 0.03],
+            "confirm_bars": [1, 2, 3],
+            "stop_loss_pct": [0.01, 0.015, 0.02],
+            "take_profit_pct": [0.02, 0.03, 0.05],
+        },
+        "params_cls": GapAndGoParams,
+        "strategy_cls": GapAndGoStrategy,
     },
 }
 

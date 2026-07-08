@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from trading_bot.backtest.param_grids import DEFAULT_GRIDS, make_factory
+from trading_bot.backtest.param_grids import make_factory
 from trading_bot.backtest.walk_forward import summarize_windows, walk_forward_optimize
 from trading_bot.data.fetch import fetch_ohlcv
 from trading_bot.journal.journal import Journal, JournalEntry
@@ -13,6 +13,9 @@ from trading_bot.journal.journal import Journal, JournalEntry
 # Smaller grids than the full DEFAULT_GRIDS so screening many symbols x
 # strategies finishes in a reasonable time; optimize/walk-forward on a
 # shortlisted symbol later with the full grid for the final parameter choice.
+# The intraday day-trading strategies are deliberately absent: this screen
+# runs on 24/7 crypto markets, where session-based logic (opening range,
+# session VWAP, overnight gaps) doesn't apply.
 SCREEN_GRIDS = {
     "trend_following": {"fast_ema": [10, 20], "slow_ema": [40, 50], "trend_ema": [200],
                           "stop_loss_pct": [0.02], "take_profit_pct": [0.06]},
@@ -86,9 +89,8 @@ def screen(
             print(f"  skipping {symbol}: only {len(df)} bars, need {train_bars + test_bars}")
             continue
 
-        for strategy_name in DEFAULT_GRIDS:
+        for strategy_name, grid in SCREEN_GRIDS.items():
             factory = make_factory(strategy_name)
-            grid = SCREEN_GRIDS[strategy_name]
             windows = walk_forward_optimize(df, factory, grid, train_bars=train_bars, test_bars=test_bars)
             summary = summarize_windows(windows)
             score = score_summary(summary)

@@ -8,22 +8,39 @@ from trading_bot.backtest.metrics import compute_metrics
 from trading_bot.backtest.optimize import grid_search
 from trading_bot.backtest.param_grids import DEFAULT_GRIDS, make_factory
 from trading_bot.backtest.walk_forward import summarize_windows, walk_forward_optimize
+from trading_bot.data.alpaca_data import fetch_stock_bars
 from trading_bot.data.fetch import fetch_ohlcv, load_csv
 from trading_bot.journal.journal import Journal, JournalEntry
-from trading_bot.pinescript.generator import generate_pine_script
+from trading_bot.pinescript.generator import TEMPLATES_DIR, generate_pine_script
 from trading_bot.strategies.breakout import BreakoutStrategy
+from trading_bot.strategies.gap_and_go import GapAndGoStrategy
 from trading_bot.strategies.mean_reversion import MeanReversionStrategy
+from trading_bot.strategies.opening_range_breakout import OpeningRangeBreakoutStrategy
 from trading_bot.strategies.trend_following import TrendFollowingStrategy
+from trading_bot.strategies.vwap_reversion import VwapReversionStrategy
 
 STRATEGIES = {
     "trend_following": TrendFollowingStrategy,
     "mean_reversion": MeanReversionStrategy,
     "breakout": BreakoutStrategy,
+    # Intraday day-trading strategies: need minute/hour bars, always flat overnight.
+    "opening_range_breakout": OpeningRangeBreakoutStrategy,
+    "vwap_reversion": VwapReversionStrategy,
+    "gap_and_go": GapAndGoStrategy,
 }
+
+# Only strategies with a Pine template can be exported to TradingView.
+PINE_STRATEGIES = sorted(name for name in STRATEGIES if (TEMPLATES_DIR / f"{name}.pine").exists())
 
 
 def cmd_fetch(args: argparse.Namespace) -> None:
     df = fetch_ohlcv(args.symbol, timeframe=args.timeframe, limit=args.limit, exchange=args.exchange)
+    df.to_csv(args.out)
+    print(f"Wrote {len(df)} rows to {args.out}")
+
+
+def cmd_fetch_stocks(args: argparse.Namespace) -> None:
+    df = fetch_stock_bars(args.symbol, timeframe=args.timeframe, limit=args.limit, feed=args.feed)
     df.to_csv(args.out)
     print(f"Wrote {len(df)} rows to {args.out}")
 
@@ -142,6 +159,14 @@ def main() -> None:
     p_fetch.add_argument("--out", required=True)
     p_fetch.set_defaults(func=cmd_fetch)
 
+    p_fetch_stocks = sub.add_parser("fetch-stocks", help="Fetch stock OHLCV bars from Alpaca (free IEX feed)")
+    p_fetch_stocks.add_argument("--symbol", required=True)
+    p_fetch_stocks.add_argument("--timeframe", default="5Min", help="1Min, 5Min, 15Min, 30Min, 1Hour, or 1Day")
+    p_fetch_stocks.add_argument("--limit", type=int, default=2000)
+    p_fetch_stocks.add_argument("--feed", default="iex", help="iex (free) or sip (paid subscription)")
+    p_fetch_stocks.add_argument("--out", required=True)
+    p_fetch_stocks.set_defaults(func=cmd_fetch_stocks)
+
     p_backtest = sub.add_parser("backtest", help="Run a backtest and log it to the journal")
     p_backtest.add_argument("--data", required=True)
     p_backtest.add_argument("--strategy", choices=STRATEGIES.keys(), required=True)
@@ -171,7 +196,7 @@ def main() -> None:
     p_wf.set_defaults(func=cmd_walk_forward)
 
     p_pine = sub.add_parser("pinescript", help="Generate a Pine Script for TradingView")
-    p_pine.add_argument("--strategy", choices=STRATEGIES.keys(), required=True)
+    p_pine.add_argument("--strategy", choices=PINE_STRATEGIES, required=True)
     p_pine.add_argument("--symbol", default="BTCUSDT")
     p_pine.add_argument("--out", default=None)
     p_pine.set_defaults(func=cmd_pinescript)
