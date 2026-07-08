@@ -143,6 +143,43 @@ Two regulatory realities to know before trading these live:
 - Shorting requires a margin account and locate availability; cash accounts
   can only trade the long side of these strategies.
 
+## Copy trading (Collective2)
+
+`trading_bot/copytrade/` follows Collective2 strategy leaders and relays
+their signals through the webhook server, which owns execution, the kill
+switch, and the order caps:
+
+```
+Collective2 API -> copytrade monitor -> webhook server -> Alpaca (paper first)
+```
+
+You need a C2 account, an API key, and an active subscription to each
+strategy you follow. Pick leaders with multi-year verified track records,
+controlled drawdowns, and swing-scale holding periods — copy latency kills
+fast styles.
+
+```bash
+export C2_API_KEY=...
+export WEBHOOK_SECRET=...
+export ALPACA_API_KEY=... ALPACA_API_SECRET=...   # execution (paper) + quotes for sizing
+
+# terminal 1: the webhook server (TRADING_MODE defaults to paper)
+uvicorn trading_bot.webhook_server:app --port 8000
+
+# terminal 2: follow one or more C2 strategy IDs
+python -m trading_bot.copytrade.monitor --strategies 131912345 \
+  --equity 100 --risk-per-trade-pct 0.10 --stop-loss-pct 0.06 --poll-seconds 300
+```
+
+Key property: the monitor mirrors each leader's *direction* only. Order
+size is always recomputed from your own equity, risk-per-trade, and stop
+distance (`size_from_risk`), capped by `--max-position-pct` — a leader's
+size or leverage never reaches your account. Relayed signal IDs persist in
+`copytrade_state.json` (restarts don't re-fire old trades), `copytrade.kill`
+halts the monitor, and the webhook's own `/kill` and order caps still apply
+downstream. Exits (`STC`/`BTC`) relay as `close` alerts, which the stocks
+broker executes by liquidating the position.
+
 ## Risk management
 
 The backtest engine enforces position sizing, a per-trade stop loss, and a

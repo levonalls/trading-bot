@@ -28,10 +28,10 @@ class TradingViewAlert(BaseModel):
     action: str  # "long" | "short" | "close"
     symbol: str
     size: float = 1.0
-    market: str = "crypto"  # "crypto" | "futures" -> routes to ccxt or IB
+    market: str = "crypto"  # "crypto" | "futures" | "stocks" -> ccxt, IB, or Alpaca
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=3)
 def _get_broker(market: str) -> Broker:
     """Lazily construct the broker on first use so importing this module
     (e.g. for tests) never requires exchange/IB credentials or a running
@@ -46,6 +46,10 @@ def _get_broker(market: str) -> Broker:
         from trading_bot.execution.ccxt_broker import CcxtBroker
 
         return CcxtBroker(exchange_id=CRYPTO_EXCHANGE, paper=paper)
+    if market == "stocks":
+        from trading_bot.execution.alpaca_broker import AlpacaBroker
+
+        return AlpacaBroker(paper=paper)
     raise ValueError(f"Unknown market '{market}'")
 
 
@@ -63,6 +67,9 @@ def receive_alert(alert: TradingViewAlert, x_webhook_secret: str | None = Header
     `x-webhook-secret: <WEBHOOK_SECRET>`.
     """
     _check_auth(x_webhook_secret)
+
+    if alert.action == "close":
+        return _close_position(alert)
 
     side = {"long": "buy", "short": "sell"}.get(alert.action)
     if side is None:
@@ -95,6 +102,36 @@ def receive_alert(alert: TradingViewAlert, x_webhook_secret: str | None = Header
         )
     )
     return {"status": "ok", "order": order}
+
+
+def _close_position(alert: TradingViewAlert) -> dict:
+    """Close an existing position (used by copy-trade exit signals).
+
+    Closes reduce exposure, so they skip the size cap — but the kill switch
+    and daily order cap still apply (size 0 passes the size check only).
+    Brokers without close support (ccxt/IB adapters, currently) ignore the
+    alert rather than guessing at position state.
+    """
+    allowed, reason = risk_guard.check(0)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=f"close rejected: {reason}")
+
+    broker = _get_broker(alert.market)
+    if not hasattr(broker, "close_position"):
+        return {"status": "ignored", "reason": f"{alert.market} broker has no close support"}
+
+    result = broker.close_position(alert.symbol)
+    risk_guard.record_order()
+    journal.log(
+        JournalEntry(
+            entry_date=date.today().isoformat(),
+            strategy="webhook",
+            symbol=alert.symbol,
+            metrics={"action": "close", "mode": TRADING_MODE},
+            notes=f"position closed via {alert.market} broker: {result}",
+        )
+    )
+    return {"status": "ok", "order": result}
 
 
 @app.post("/kill")

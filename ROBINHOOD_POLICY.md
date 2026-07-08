@@ -3,6 +3,19 @@
 Applies to the Robinhood "Agentic" cash account (••••5270), traded via the
 `robinhood-trading` MCP server. Agreed 2026-07-08 with account owner.
 
+## Status
+
+- **2026-07-08: owner approved LIVE trading** on this account with the ~$100
+  balance, within the parameters below. Robinhood has no paper mode, so this
+  account is live from the first order.
+- Execution path: the bot cannot reach Robinhood directly (no public API) —
+  live orders on this account are placed by the agent in-session via the
+  `robinhood-trading` MCP tools, per this policy.
+- New signal sources (e.g. Collective2 copy trading) must run against the
+  Alpaca paper pipeline first; only signals from a source that has passed
+  the promotion rule (30+ trades over 4-6 weeks, profitable after costs,
+  <10% drawdown) may be executed on this live account.
+
 ## Account profile
 
 - Starting equity: ~$100 cash (explicitly designated risk capital)

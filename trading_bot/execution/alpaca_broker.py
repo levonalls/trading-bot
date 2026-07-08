@@ -77,6 +77,16 @@ class AlpacaBroker(Broker):
             "raw": resp.json(),
         }
 
+    def close_position(self, symbol: str) -> dict:
+        """Liquidate the entire position in `symbol` at market."""
+        resp = self.client.delete(f"/v2/positions/{symbol}")
+        resp.raise_for_status()
+        return {
+            "symbol": symbol,
+            "status": "closed_paper" if self.paper else "closed_live",
+            "raw": resp.json(),
+        }
+
     def fetch_balance(self) -> dict:
         resp = self.client.get("/v2/account")
         resp.raise_for_status()
