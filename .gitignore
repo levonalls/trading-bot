@@ -8,3 +8,4 @@ data/*.csv
 .env.*
 live_runner_state_*.json
 live_runner.kill
+.hood_plan_state.json
