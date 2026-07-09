@@ -1,6 +1,8 @@
 # Active Trade Plan — HOOD dip entry
 
 Status: **ARMED** (no position yet). Owner approved 2026-07-09.
+Execution mode: **pre-approved** — the agent executes the rules below
+without per-trade confirmation (owner re-confirmed 2026-07-09).
 Account: Robinhood "Agentic" cash account ••••5270 (~$100 buying power).
 Governed by ROBINHOOD_POLICY.md — its halts and floors override this plan.
 
